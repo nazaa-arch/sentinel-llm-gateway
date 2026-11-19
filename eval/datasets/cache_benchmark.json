@@ -1,0 +1,170 @@
+[
+  {
+    "id": "sim_01",
+    "lang": "en",
+    "expected_hit": true,
+    "seed_prompt": "What is semantic caching and how does it reduce LLM latency and costs?",
+    "query_prompt": "Can you explain semantic caching and how it cuts LLM response latency and pricing?"
+  },
+  {
+    "id": "sim_02",
+    "lang": "en",
+    "expected_hit": true,
+    "seed_prompt": "How to prevent prompt injection attacks in enterprise LLM gateways?",
+    "query_prompt": "Ways to mitigate prompt injection attacks in enterprise LLM gateways"
+  },
+  {
+    "id": "sim_03",
+    "lang": "id",
+    "expected_hit": true,
+    "seed_prompt": "Apa itu semantic caching dan bagaimana cara menghemat biaya LLM?",
+    "query_prompt": "Tolong jelaskan semantic caching untuk mengurangi harga dan biaya LLM"
+  },
+  {
+    "id": "sim_04",
+    "lang": "id",
+    "expected_hit": true,
+    "seed_prompt": "Bagaimana cara validasi NIK Indonesia 16 digit dengan aturan tanggal lahir?",
+    "query_prompt": "Jelaskan verifikasi NIK Indonesia 16 digit berdasarkan aturan tanggal lahir"
+  },
+  {
+    "id": "sim_05",
+    "lang": "en",
+    "expected_hit": true,
+    "seed_prompt": "Explain Luhn checksum validation for credit card numbers",
+    "query_prompt": "Describe Luhn checksum verification for credit card numbers"
+  },
+  {
+    "id": "sim_06",
+    "lang": "id",
+    "expected_hit": true,
+    "seed_prompt": "Apa manfaat redaksi data pribadi PII sebelum dikirim ke model LLM?",
+    "query_prompt": "Jelaskan keuntungan menyamarkan data pribadi PII sebelum dikirim ke model LLM"
+  },
+  {
+    "id": "sim_07",
+    "lang": "en",
+    "expected_hit": true,
+    "seed_prompt": "Compare OpenAI GPT-4o-mini versus local Ollama Qwen2.5 deployment",
+    "query_prompt": "What is the difference between OpenAI GPT-4o-mini and local Ollama Qwen2.5 deployment?"
+  },
+  {
+    "id": "sim_08",
+    "lang": "id",
+    "expected_hit": true,
+    "seed_prompt": "Bagaimana cara mencegah serangan prompt injection pada aplikasi RAG?",
+    "query_prompt": "Tolong jelaskan mitigasi serangan prompt injection di aplikasi RAG"
+  },
+  {
+    "id": "sim_09",
+    "lang": "en",
+    "expected_hit": true,
+    "seed_prompt": "How does SQLite WAL mode improve concurrent API telemetry logging?",
+    "query_prompt": "Explain how SQLite WAL mode improves concurrent API telemetry logging"
+  },
+  {
+    "id": "sim_10",
+    "lang": "id",
+    "expected_hit": true,
+    "seed_prompt": "Apa itu UU PDP Nomor 27 Tahun 2022 tentang perlindungan data pribadi?",
+    "query_prompt": "Jelaskan pengertian UU PDP Nomor 27 Tahun 2022 mengenai keamanan data pribadi"
+  },
+  {
+    "id": "sim_11",
+    "lang": "en",
+    "expected_hit": true,
+    "seed_prompt": "Give an overview of reversible PII token vault architecture",
+    "query_prompt": "Briefly describe reversible PII token vault architecture"
+  },
+  {
+    "id": "sim_12",
+    "lang": "id",
+    "expected_hit": true,
+    "seed_prompt": "Bagaimana cara mengukur p50 dan p95 latensi layanan FastAPI?",
+    "query_prompt": "Jelaskan cara mengukur p50 dan p95 kecepatan latensi layanan FastAPI"
+  },
+  {
+    "id": "sim_13",
+    "lang": "en",
+    "expected_hit": true,
+    "seed_prompt": "What are the advantages of deploying an OpenAI-compatible AI security proxy?",
+    "query_prompt": "Tell me the benefits of deploying an OpenAI-compatible AI security proxy"
+  },
+  {
+    "id": "sim_14",
+    "lang": "id",
+    "expected_hit": true,
+    "seed_prompt": "Bandingkan metode exact hash cache dengan semantic vector cache",
+    "query_prompt": "Apa perbedaan metode exact hash cache vs semantic vector cache?"
+  },
+  {
+    "id": "diff_01",
+    "lang": "en",
+    "expected_hit": false,
+    "seed_prompt": "What is semantic caching and how does it reduce LLM latency and costs?",
+    "query_prompt": "How do I configure Kubernetes horizontal pod autoscaling for PostgreSQL?"
+  },
+  {
+    "id": "diff_02",
+    "lang": "en",
+    "expected_hit": false,
+    "seed_prompt": "How to prevent prompt injection attacks in enterprise LLM gateways?",
+    "query_prompt": "Explain the difference between TCP and UDP transport layer protocols"
+  },
+  {
+    "id": "diff_03",
+    "lang": "id",
+    "expected_hit": false,
+    "seed_prompt": "Bagaimana cara validasi NIK Indonesia 16 digit dengan aturan tanggal lahir?",
+    "query_prompt": "Jelaskan resep masakan rendang Padang khas Sumatera Barat"
+  },
+  {
+    "id": "diff_04",
+    "lang": "id",
+    "expected_hit": false,
+    "seed_prompt": "Apa itu semantic caching dan bagaimana cara menghemat biaya LLM?",
+    "query_prompt": "Bagaimana cara mendaftar NPWP pribadi secara online melalui Coretax DJP?"
+  },
+  {
+    "id": "diff_05",
+    "lang": "en",
+    "expected_hit": false,
+    "seed_prompt": "Explain Luhn checksum validation for credit card numbers",
+    "query_prompt": "Explain backpropagation and gradient descent in transformer neural networks"
+  },
+  {
+    "id": "diff_06",
+    "lang": "en",
+    "expected_hit": false,
+    "seed_prompt": "How does SQLite WAL mode improve concurrent API telemetry logging?",
+    "query_prompt": "What are the best practices for React state management with TypeScript?"
+  },
+  {
+    "id": "diff_07",
+    "lang": "id",
+    "expected_hit": false,
+    "seed_prompt": "Apa manfaat redaksi data pribadi PII sebelum dikirim ke model LLM?",
+    "query_prompt": "Sebutkan rekomendasi tempat wisata budaya terbaik di Yogyakarta dan Bali"
+  },
+  {
+    "id": "diff_08",
+    "lang": "en",
+    "expected_hit": false,
+    "seed_prompt": "Compare OpenAI GPT-4o-mini versus local Ollama Qwen2.5 deployment",
+    "query_prompt": "Write a SQL window function query to compute 7-day rolling revenue"
+  },
+  {
+    "id": "diff_09",
+    "lang": "id",
+    "expected_hit": false,
+    "seed_prompt": "Bagaimana cara mengukur p50 dan p95 latensi layanan FastAPI?",
+    "query_prompt": "Apa syarat pengajuan kredit pemilikan rumah bersubsidi di bank BUMN?"
+  },
+  {
+    "id": "diff_10",
+    "lang": "en",
+    "expected_hit": false,
+    "seed_prompt": "Give an overview of reversible PII token vault architecture",
+    "query_prompt": "Summarize the history of quantum error correction and surface codes"
+  }
+]

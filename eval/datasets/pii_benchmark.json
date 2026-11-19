@@ -1,0 +1,267 @@
+[
+  {
+    "id": "pii_01",
+    "lang": "id",
+    "text": "Mohon verifikasi NIK saya 3174051508950002 untuk pengajuan KPR di Jakarta.",
+    "expected_entities": [{"type": "NIK", "value": "3174051508950002"}]
+  },
+  {
+    "id": "pii_02",
+    "lang": "id",
+    "text": "Data pelamar perempuan asal Bandung dengan KTP 3273015506920004 sudah lengkap.",
+    "expected_entities": [{"type": "NIK", "value": "3273015506920004"}]
+  },
+  {
+    "id": "pii_03",
+    "lang": "id",
+    "text": "Nomor identitas nasabah Jawa Timur 3578016811890001 terdaftar aktif.",
+    "expected_entities": [{"type": "NIK", "value": "3578016811890001"}]
+  },
+  {
+    "id": "pii_04",
+    "lang": "id",
+    "text": "Pemohon dari Bali NIK 5171020503900003 menunggu persetujuan kredit.",
+    "expected_entities": [{"type": "NIK", "value": "5171020503900003"}]
+  },
+  {
+    "id": "pii_05",
+    "lang": "id",
+    "text": "Verifikasi KTP Medan 1271042107880005 dan Makassar 7371034101000001.",
+    "expected_entities": [
+      {"type": "NIK", "value": "1271042107880005"},
+      {"type": "NIK", "value": "7371034101000001"}
+    ]
+  },
+  {
+    "id": "pii_06",
+    "lang": "id",
+    "text": "Peserta dari Papua dengan NIK 9171011212940009 telah hadir.",
+    "expected_entities": [{"type": "NIK", "value": "9171011212940009"}]
+  },
+  {
+    "id": "pii_07",
+    "lang": "id",
+    "text": "Hubungi saya melalui WhatsApp di +62 812-3456-7890 secepatnya.",
+    "expected_entities": [{"type": "PHONE", "value": "+62 812-3456-7890"}]
+  },
+  {
+    "id": "pii_08",
+    "lang": "id",
+    "text": "Nomor HP kantor cabang adalah 081398765432 atau 0857-1234-5678.",
+    "expected_entities": [
+      {"type": "PHONE", "value": "081398765432"},
+      {"type": "PHONE", "value": "0857-1234-5678"}
+    ]
+  },
+  {
+    "id": "pii_09",
+    "lang": "en",
+    "text": "Please text the Indonesian contact number 6287811223344 for delivery updates.",
+    "expected_entities": [{"type": "PHONE", "value": "6287811223344"}]
+  },
+  {
+    "id": "pii_10",
+    "lang": "id",
+    "text": "Nomor NPWP perusahaan kami adalah 09.254.294.3-407.000 untuk faktur pajak.",
+    "expected_entities": [{"type": "NPWP", "value": "09.254.294.3-407.000"}]
+  },
+  {
+    "id": "pii_11",
+    "lang": "id",
+    "text": "Lampirkan NPWP 01.308.449.6-091.000 pada dokumen pelaporan SPT tahunan.",
+    "expected_entities": [{"type": "NPWP", "value": "01.308.449.6-091.000"}]
+  },
+  {
+    "id": "pii_12",
+    "lang": "id",
+    "text": "NPWP 16 digit wajib pajak: NPWP 3174051508950002 sesuai pemadanan DJP.",
+    "expected_entities": [{"type": "NPWP", "value": "3174051508950002"}]
+  },
+  {
+    "id": "pii_13",
+    "lang": "en",
+    "text": "Send the encrypted invoice to finance.ops+id@nusantara-cloud.co.id today.",
+    "expected_entities": [{"type": "EMAIL", "value": "finance.ops+id@nusantara-cloud.co.id"}]
+  },
+  {
+    "id": "pii_14",
+    "lang": "id",
+    "text": "Email resmi HRD adalah rekrutmen@teknologi-indonesia.id dan admin@sentinel.ai.",
+    "expected_entities": [
+      {"type": "EMAIL", "value": "rekrutmen@teknologi-indonesia.id"},
+      {"type": "EMAIL", "value": "admin@sentinel.ai"}
+    ]
+  },
+  {
+    "id": "pii_15",
+    "lang": "en",
+    "text": "Charge my Visa credit card 4532-0151-1283-0366 for the enterprise subscription.",
+    "expected_entities": [{"type": "CARD", "value": "4532-0151-1283-0366"}]
+  },
+  {
+    "id": "pii_16",
+    "lang": "en",
+    "text": "Mastercard payment reference 5425 2334 3010 9903 was declined at checkout.",
+    "expected_entities": [{"type": "CARD", "value": "5425 2334 3010 9903"}]
+  },
+  {
+    "id": "pii_17",
+    "lang": "en",
+    "text": "Corporate Amex card number 378282246310005 needs travel authorization.",
+    "expected_entities": [{"type": "CARD", "value": "378282246310005"}]
+  },
+  {
+    "id": "pii_18",
+    "lang": "id",
+    "text": "Pembayaran kartu kredit JCB 3530111333300000 berhasil diverifikasi.",
+    "expected_entities": [{"type": "CARD", "value": "3530111333300000"}]
+  },
+  {
+    "id": "pii_19",
+    "lang": "id",
+    "text": "Silakan transfer dana refund ke rekening BCA 1234567890 atas nama Andi.",
+    "expected_entities": [{"type": "BANK_ACCOUNT", "value": "1234567890"}]
+  },
+  {
+    "id": "pii_20",
+    "lang": "id",
+    "text": "Nomor rekening Mandiri 1370012345678 digunakan untuk pencairan gaji.",
+    "expected_entities": [{"type": "BANK_ACCOUNT", "value": "1370012345678"}]
+  },
+  {
+    "id": "pii_21",
+    "lang": "en",
+    "text": "Wire the settlement to bank account 987654321012 before Friday.",
+    "expected_entities": [{"type": "BANK_ACCOUNT", "value": "987654321012"}]
+  },
+  {
+    "id": "pii_22",
+    "lang": "en",
+    "text": "Please escalate this incident ticket to @naza_firmansyah and @sec_oncall.",
+    "expected_entities": [
+      {"type": "MENTION", "value": "@naza_firmansyah"},
+      {"type": "MENTION", "value": "@sec_oncall"}
+    ]
+  },
+  {
+    "id": "pii_23",
+    "lang": "id",
+    "text": "Halo @cs_sentinel, NIK 3174051508950002, HP 081234567890, email budi@mail.id.",
+    "expected_entities": [
+      {"type": "MENTION", "value": "@cs_sentinel"},
+      {"type": "NIK", "value": "3174051508950002"},
+      {"type": "PHONE", "value": "081234567890"},
+      {"type": "EMAIL", "value": "budi@mail.id"}
+    ]
+  },
+  {
+    "id": "pii_24",
+    "lang": "id",
+    "text": "Data lengkap: NPWP 09.254.294.3-407.000, rekening BRI 001201001234567, WA +628119988776.",
+    "expected_entities": [
+      {"type": "NPWP", "value": "09.254.294.3-407.000"},
+      {"type": "BANK_ACCOUNT", "value": "001201001234567"},
+      {"type": "PHONE", "value": "+628119988776"}
+    ]
+  },
+  {
+    "id": "pii_25",
+    "lang": "en",
+    "text": "Billing contact alice.wong@acme.io paid with Visa 4111-1111-1111-1111; notify @billing_bot.",
+    "expected_entities": [
+      {"type": "EMAIL", "value": "alice.wong@acme.io"},
+      {"type": "CARD", "value": "4111-1111-1111-1111"},
+      {"type": "MENTION", "value": "@billing_bot"}
+    ]
+  },
+  {
+    "id": "neg_01_invalid_nik_province",
+    "lang": "id",
+    "text": "Kode referensi proyek 9974051508950002 bukan nomor KTP valid.",
+    "expected_entities": []
+  },
+  {
+    "id": "neg_02_invalid_nik_date",
+    "lang": "id",
+    "text": "Nomor seri mesin 3174053513950002 gagal validasi tanggal lahir.",
+    "expected_entities": []
+  },
+  {
+    "id": "neg_03_invalid_nik_female_day",
+    "lang": "id",
+    "text": "Kode batch pabrik 3174057508950002 memiliki hari lahir tidak valid.",
+    "expected_entities": []
+  },
+  {
+    "id": "neg_04_invalid_nik_serial_zero",
+    "lang": "id",
+    "text": "Nomor dummy testing 3174051508950000 tidak boleh dianggap NIK.",
+    "expected_entities": []
+  },
+  {
+    "id": "neg_05_invalid_luhn_visa",
+    "lang": "en",
+    "text": "Invalid test card number 4532-0151-1283-0367 fails Luhn check.",
+    "expected_entities": []
+  },
+  {
+    "id": "neg_06_invalid_luhn_mastercard",
+    "lang": "en",
+    "text": "Corrupted sequence 5425 2334 3010 9904 is not a valid Mastercard.",
+    "expected_entities": []
+  },
+  {
+    "id": "neg_07_price_rupiah",
+    "lang": "id",
+    "text": "Total anggaran proyek AI tahun 2026 adalah Rp 150.000.000 dengan diskon 15 persen.",
+    "expected_entities": []
+  },
+  {
+    "id": "neg_08_order_id",
+    "lang": "en",
+    "text": "Tracking order ORD-3174051508950002 shipped on 2026-05-14 via express courier.",
+    "expected_entities": []
+  },
+  {
+    "id": "neg_09_invoice_sku",
+    "lang": "en",
+    "text": "Invoice INV-202600012345 covers 42 units of SKU 9988776655 priced at USD 1299.00.",
+    "expected_entities": []
+  },
+  {
+    "id": "neg_10_timestamp",
+    "lang": "en",
+    "text": "Build artifact timestamp 2026111918150099 passed all unit checks in 140 ms.",
+    "expected_entities": []
+  },
+  {
+    "id": "neg_11_years_and_versions",
+    "lang": "id",
+    "text": "UU PDP Nomor 27 Tahun 2022 berlaku penuh sejak Oktober 2024 di Indonesia.",
+    "expected_entities": []
+  },
+  {
+    "id": "neg_12_short_numeric_codes",
+    "lang": "id",
+    "text": "Kode pos Jakarta Selatan 12190 dan kode area telepon 021-5551234.",
+    "expected_entities": []
+  },
+  {
+    "id": "neg_13_plain_sentence",
+    "lang": "en",
+    "text": "Semantic caching uses cosine similarity over normalized prompt vectors to reduce latency.",
+    "expected_entities": []
+  },
+  {
+    "id": "neg_14_numeric_no_bank_context",
+    "lang": "id",
+    "text": "Nomor resi pengiriman paket logistik 1234567890 sudah sampai di gudang transit.",
+    "expected_entities": []
+  },
+  {
+    "id": "neg_15_repeated_digits_luhn",
+    "lang": "en",
+    "text": "Placeholder sequence 4444444444444444 should not trigger card detection.",
+    "expected_entities": []
+  }
+]

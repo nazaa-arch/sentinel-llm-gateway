@@ -1,0 +1,90 @@
+{
+  "generated_at": "2026-11-19T18:32:20.007153+00:00",
+  "pii_benchmark": {
+    "total_cases": 40,
+    "negative_trap_cases": 15,
+    "true_positives": 36,
+    "false_positives": 0,
+    "false_negatives": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "negative_case_fpr": 0.0,
+    "avg_latency_ms": 0.031,
+    "per_entity_type": {
+      "NIK": {
+        "tp": 8,
+        "fp": 0,
+        "fn": 0
+      },
+      "PHONE": {
+        "tp": 6,
+        "fp": 0,
+        "fn": 0
+      },
+      "NPWP": {
+        "tp": 4,
+        "fp": 0,
+        "fn": 0
+      },
+      "EMAIL": {
+        "tp": 5,
+        "fp": 0,
+        "fn": 0
+      },
+      "CARD": {
+        "tp": 5,
+        "fp": 0,
+        "fn": 0
+      },
+      "BANK_ACCOUNT": {
+        "tp": 4,
+        "fp": 0,
+        "fn": 0
+      },
+      "MENTION": {
+        "tp": 4,
+        "fp": 0,
+        "fn": 0
+      }
+    },
+    "errors": []
+  },
+  "injection_benchmark": {
+    "total_cases": 46,
+    "adversarial_cases": 25,
+    "benign_cases": 21,
+    "true_positives": 25,
+    "true_negatives": 21,
+    "false_positives": 0,
+    "false_negatives": 0,
+    "accuracy": 1.0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "false_positive_rate": 0.0,
+    "avg_latency_ms": 0.048,
+    "errors": []
+  },
+  "cache_benchmark": {
+    "threshold": 0.86,
+    "total_pairs": 24,
+    "paraphrase_pairs": 14,
+    "distinct_pairs": 10,
+    "true_positives": 14,
+    "true_negatives": 10,
+    "false_positives": 0,
+    "false_negatives": 0,
+    "paraphrase_hit_rate": 1.0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "false_positive_rate": 0.0,
+    "avg_paraphrase_similarity": 0.9714,
+    "avg_distinct_similarity": 0.0593,
+    "avg_uncached_latency_ms": 27.469,
+    "avg_cache_hit_latency_ms": 2.772,
+    "latency_speedup_x": 9.91,
+    "errors": []
+  }
+}
