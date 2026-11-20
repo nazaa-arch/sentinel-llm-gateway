@@ -12,11 +12,11 @@ Sentinel LLM Gateway sits between client applications and upstream LLM providers
 flowchart LR
     Client["Client App / OpenAI SDK / Web UI"] --> RL["Sliding-Window Rate Limiter"]
     RL --> Guard["Multi-Layer Guardrails Engine<br/>(Unicode/Leet/Base64 + Noisy-OR Risk)"]
-    Guard -->|Block Policy Triggered| Block["HTTP 403 + Audit Log"]
-    Guard -->|Allowed / Warn / Redact| PII["Indonesian & Global PII Redactor<br/>+ Ephemeral Reversible Vault"]
+    Guard -->|"Block Policy Triggered"| Block["HTTP 403 + Audit Log"]
+    Guard -->|"Allowed / Warn / Redact"| PII["Indonesian & Global PII Redactor<br/>+ Ephemeral Reversible Vault"]
     PII --> Cache{"SQLite Semantic Cache<br/>(Exact Hash + Cosine >= 0.86)"}
-    Cache -->|Cache Hit| Restore["Optional PII Restoration<br/>(restore_pii=True)"]
-    Cache -->|Cache Miss| Router["Async Multi-Provider Router"]
+    Cache -->|"Cache Hit"| Restore["Optional PII Restoration<br/>(restore_pii=True)"]
+    Cache -->|"Cache Miss"| Router["Async Multi-Provider Router"]
     Router --> Demo["Local Demo Engine (Offline)"]
     Router --> Ollama["Ollama (/api/chat)"]
     Router --> Gemini["Google Gemini REST API"]
@@ -52,7 +52,7 @@ flowchart LR
 4. **Multi-Provider Async Router (`src/sentinel_gateway/providers.py`)**
    - Runs **100% offline out-of-the-box** using the deterministic `local-demo` engine, or seamlessly routes to **Ollama**, **Google Gemini**, and **OpenAI** via `httpx.AsyncClient` with configurable timeout and graceful fallback.
 
-5. **Observability, FinOps Telemetry & Dark-Mode Web Console (`src/sentinel_gateway/telemetry.py`, `static/index.html`)**
+5. **Observability, FinOps Telemetry & Dark-Mode Web Console (`src/sentinel_gateway/telemetry.py`, `src/sentinel_gateway/static/index.html`)**
    - Tracks p50/p95 latency, cache hit rate, guardrail block rate, PII entity counts, and estimated USD cost saved in SQLite WAL mode.
    - Interactive Web UI served at `/` with **Chat Playground**, **Live Guardrails & PII Inspector**, and **Real-Time Telemetry & Audit Dashboard**, plus OpenAPI Swagger docs at `/docs`.
 
@@ -62,10 +62,14 @@ flowchart LR
 
 ### 1. Run Locally (Zero External API Keys Required)
 
+Works on **Linux, macOS, and Windows**:
+
 ```bash
-pip install -r requirements.txt
-uvicorn sentinel_gateway.api:app --app-dir src --reload --port 8000
+pip install -e ".[dev]"
+uvicorn sentinel_gateway.api:app --reload --port 8000
 ```
+
+*(Alternatively, `pip install -r requirements.txt` followed by `uvicorn sentinel_gateway.api:app --app-dir src --reload --port 8000`.)*
 
 Open:
 - **Interactive Web Console**: `http://127.0.0.1:8000/`
@@ -76,13 +80,18 @@ Open:
 Copy `.env.example` to `.env` and configure any provider:
 
 ```bash
+# Linux / macOS:
 cp .env.example .env
+
+# Windows (PowerShell):
+# Copy-Item .env.example .env
+
 # Example: Local Ollama
 # SENTINEL_PROVIDER=ollama
 # SENTINEL_OLLAMA_BASE_URL=http://localhost:11434
 # SENTINEL_OLLAMA_MODEL=qwen2.5:7b
 #
-# Example: Google Gemini
+# Example: Google Gemini (sent via x-goog-api-key header, never in URL)
 # SENTINEL_PROVIDER=gemini
 # SENTINEL_GEMINI_API_KEY=your_key_here
 #
@@ -150,17 +159,22 @@ curl -X POST http://127.0.0.1:8000/v1/guard/inspect \
 
 ## Evaluation Benchmarks
 
-Measured locally using `python eval/run_eval.py` (full machine-readable output persisted in [`eval/latest_report.json`](eval/latest_report.json)):
+> **Methodology & Reproducibility Note:** The metrics below are measured on the **curated local evaluation suite** (`eval/datasets/*.json`, 110 bilingual EN/ID cases) using the **deterministic offline engine (`local-demo`)** via `python eval/run_eval.py` (full machine-readable output persisted in [`eval/latest_report.json`](eval/latest_report.json)). This provides zero-cost, 100% CI-reproducible regression testing for PII validation, known injection/obfuscation surfaces, negative traps, and paraphrase cache alignment. Real-world production traffic with novel adversarial phrasing will have lower recall than a curated regression suite (see [Engineering Trade-Offs & Production Notes](#engineering-trade-offs--production-notes)).
 
-| Benchmark Suite | Cases | Precision | Recall | F1 | FPR | Measured Performance |
+| Benchmark Suite (Curated Local Suite) | Cases | Precision | Recall | F1 | FPR | Key Signal / Latency |
 |---|---:|---:|---:|---:|---:|---|
-| **Indonesian & Global PII Redaction** (incl. 15 negative non-PII traps) | 40 | **1.0000** | **1.0000** | **1.0000** | **0.0000** | **0.031 ms/req** (36/36 entities, 0 FP) |
-| **Bilingual Prompt Injection & Toxicity** (25 adversarial + 21 benign EN/ID) | 46 | **1.0000** | **1.0000** | **1.0000** | **0.0000** | **0.048 ms/req** (100% accuracy) |
-| **Semantic Cache** (`threshold=0.86`, 14 paraphrases + 10 distinct pairs) | 24 | **1.0000** | **1.0000** | **1.0000** | **0.0000** | **9.91x speedup** (27.469 ms -> 2.772 ms) |
+| **Indonesian & Global PII Redaction** (incl. 15 negative non-PII traps) | 40 | **1.0000** | **1.0000** | **1.0000** | **0.0000** | 36/36 entities, 0 FP |
+| **Bilingual Prompt Injection & Toxicity** (25 adversarial + 21 benign EN/ID) | 46 | **1.0000** | **1.0000** | **1.0000** | **0.0000** | 100% curated accuracy |
+| **Semantic Cache** (`threshold=0.86`, 14 paraphrases + 10 distinct pairs) | 24 | **1.0000** | **1.0000** | **1.0000** | **0.0000** | 14/14 hits, 0 FP (`0.9714` vs `0.0593` cosine) |
 
-Additional semantic cache telemetry from the benchmark run:
+Key semantic cache separation metrics from [`eval/latest_report.json`](eval/latest_report.json):
 - Average paraphrase cosine similarity: **`0.9714`**
-- Average distinct-query cosine similarity: **`0.0593`** (0.9121 separation margin)
+- Average distinct-query cosine similarity: **`0.0593`** (`0.9121` separation margin)
+- Per-request latency varies by host CPU load (sub-millisecond on idle hosts; exact run timings are written to `eval/latest_report.json`).
+
+### Benchmarking with Live LLMs (Ollama / Gemini / OpenAI)
+
+To measure end-to-end semantic cache speedups against a live LLM (where uncached inference typically takes 400–2,000 ms vs. single-digit ms cache hits), configure `SENTINEL_PROVIDER=ollama` (or `gemini` / `openai`) in `.env`, start the gateway, and send paired paraphrase queries to `POST /v1/chat/completions` while inspecting `GET /v1/metrics` (`p50_latency_ms`, `p95_latency_ms`, `cache_hit_rate`, and `estimated_cost_saved_usd`).
 
 ---
 
@@ -178,10 +192,10 @@ python eval/run_eval.py
 
 - **Multi-View Hashing Vectorizer vs. Neural Bi-Encoders (Semantic Cache)**:
   - *Choice*: Stateless L2-normalized word + `char_wb` (3–5) `HashingVectorizer` with bilingual boilerplate/synonym canonicalization in SQLite.
-  - *Trade-off*: Achieves ~2.8 ms lookup latency, zero GPU/model download overhead, and strong same-language paraphrase recall in English and Indonesian. However, it will not align cross-lingual paraphrases (e.g., an English query hitting an Indonesian cache entry) as effectively as a multilingual neural encoder (`bge-m3` / `text-embedding-3-small`) backed by `pgvector` or Redis Vector Search.
+  - *Trade-off*: Achieves low-millisecond lookup latency, zero GPU/model download overhead, and strong same-language paraphrase recall in English and Indonesian. However, it will not align cross-lingual paraphrases (e.g., an English query hitting an Indonesian cache entry) as effectively as a multilingual neural encoder (`bge-m3` / `text-embedding-3-small`) backed by `pgvector` or Redis Vector Search.
 - **Noisy-OR Multi-Layer Rules + De-obfuscation vs. Fine-Tuned Classifier Guardrails**:
-  - *Choice*: Sub-millisecond deterministic de-obfuscation (Unicode/homoglyph/leetspeak/Base64) combined with weighted bilingual regex surfaces and Noisy-OR probability aggregation.
-  - *Trade-off*: Runs in **0.048 ms/req** with deterministic auditability and zero hallucination risk. In high-threat enterprise production, this layer should act as a **fast L1 filter** in front of an asynchronous L2 fine-tuned prompt-guard classifier (e.g., Llama Guard / DeBERTa injection model) for subtle, novel indirect prompt injections.
+  - *Choice*: Fast deterministic de-obfuscation (Unicode/homoglyph/leetspeak/Base64) combined with weighted bilingual regex surfaces and Noisy-OR probability aggregation.
+  - *Trade-off*: Runs in sub-millisecond to low-millisecond latency with deterministic auditability and zero hallucination risk. In high-threat enterprise production, this layer should act as a **fast L1 filter** in front of an asynchronous L2 fine-tuned prompt-guard classifier (e.g., Llama Guard / DeBERTa injection model) for subtle, novel indirect prompt injections.
 - **Privacy Boundary Guarantee**:
   - Raw PII is redacted *before* semantic cache keying, upstream provider dispatch, and audit log persistence. Even if `restore_pii=True` is requested, the `PIIVault` lives strictly in request-scoped ephemeral memory and is garbage-collected as soon as the HTTP response is returned.
 - **SQLite WAL vs. Distributed Stores**:

@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from sentinel_gateway.api import create_app
 from sentinel_gateway.config import Settings
+from sentinel_gateway.providers import GeminiProvider
+from sentinel_gateway.schemas import ChatMessage
 
 
 class TestGatewayAPI:
@@ -182,3 +186,98 @@ class TestGatewayAPI:
             r3 = client.post("/v1/chat/completions", json=payload)
             assert r3.status_code == 429
             assert r3.json()["error"]["code"] == "rate_limit_exceeded"
+            assert int(r3.headers["Retry-After"]) >= 1
+
+    def test_streaming_returns_400_not_supported(self, gateway_client: TestClient) -> None:
+        resp = gateway_client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "Hello"}],
+                "stream": True,
+            },
+        )
+        assert resp.status_code == 400
+        assert resp.json()["error"]["code"] == "streaming_not_supported"
+
+    def test_unredacted_pii_bypasses_semantic_cache(self, gateway_client: TestClient) -> None:
+        prompt = "Tolong verifikasi NIK 3174051508950002 untuk akun saya."
+        r1 = gateway_client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": prompt}],
+                "sentinel_options": {"redact_pii": False, "use_cache": True},
+            },
+        )
+        assert r1.status_code == 200
+        assert r1.headers["X-Sentinel-Cache"] == "MISS"
+        # Cache must remain empty so raw PII responses are never shared across users
+        assert gateway_client.get("/health").json()["cache_entries"] == 0
+
+    def test_fallback_response_does_not_poison_semantic_cache(
+        self, gateway_client: TestClient
+    ) -> None:
+        resp = gateway_client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "Explain UU PDP compliance briefly."}],
+                "sentinel_options": {"provider": "openai", "use_cache": True},
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["sentinel"]["provider"] == "local-demo"
+        assert gateway_client.get("/health").json()["cache_entries"] == 0
+
+    def test_invalid_audit_action_filter_returns_422(self, gateway_client: TestClient) -> None:
+        resp = gateway_client.get("/v1/audit?action=invalid_mode")
+        assert resp.status_code == 422
+
+    async def test_gemini_provider_uses_header_auth_and_blocks_model_traversal(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured: dict[str, object] = {}
+
+        class _FakeResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict[str, object]:
+                return {
+                    "candidates": [{"content": {"parts": [{"text": "Safe Gemini reply"}]}}],
+                    "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 3},
+                }
+
+        class _FakeAsyncClient:
+            def __init__(self, **_kwargs: object) -> None:
+                pass
+
+            async def __aenter__(self) -> _FakeAsyncClient:
+                return self
+
+            async def __aexit__(self, *_args: object) -> None:
+                return None
+
+            async def post(self, url: str, json: object, headers: dict[str, str]) -> _FakeResponse:
+                captured["url"] = url
+                captured["json"] = json
+                captured["headers"] = headers
+                return _FakeResponse()
+
+        monkeypatch.setattr(httpx, "AsyncClient", _FakeAsyncClient)
+
+        provider = GeminiProvider(api_key="super-secret-gemini-key")
+        result = await provider.complete(
+            messages=[ChatMessage(role="user", content="Hello")],
+            model="gemini-2.0-flash",
+        )
+        assert result.content == "Safe Gemini reply"
+        assert "super-secret-gemini-key" not in str(captured["url"])
+        assert captured["headers"] == {
+            "x-goog-api-key": "super-secret-gemini-key",
+            "Content-Type": "application/json",
+        }
+
+        with pytest.raises(ValueError, match="Invalid Gemini model"):
+            await provider.complete(
+                messages=[ChatMessage(role="user", content="Hello")],
+                model="../../evil?foo=bar",
+            )

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 
@@ -16,7 +18,12 @@ from sentinel_gateway.cache import SemanticCache
 from sentinel_gateway.config import PolicyMode, Settings, get_settings
 from sentinel_gateway.guardrails import GuardrailsEngine
 from sentinel_gateway.pii import PIIRedactor, PIIVault
-from sentinel_gateway.providers import ProviderRouter, estimate_cost_usd, estimate_messages_tokens
+from sentinel_gateway.providers import (
+    ProviderRouter,
+    _format_safe_provider_error,
+    estimate_cost_usd,
+    estimate_messages_tokens,
+)
 from sentinel_gateway.schemas import (
     AuditRecord,
     CacheClearResponse,
@@ -36,6 +43,7 @@ from sentinel_gateway.schemas import (
 from sentinel_gateway.telemetry import SlidingWindowRateLimiter, TelemetryStore
 
 _STATIC_DIR = Path(__file__).parent / "static"
+logger = logging.getLogger(__name__)
 
 
 def _serialize_pii_entities(entities: list) -> list[PIIEntityOut]:
@@ -91,9 +99,13 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        yield
-        cache.close()
-        telemetry.close()
+        cache.initialize()
+        telemetry.initialize()
+        try:
+            yield
+        finally:
+            cache.close()
+            telemetry.close()
 
     app = FastAPI(
         title=cfg.app_name,
@@ -104,6 +116,20 @@ def create_app(
         ),
         lifespan=lifespan,
     )
+
+    @app.exception_handler(Exception)
+    async def _unhandled_exception_handler(_request: Request, exc: Exception) -> JSONResponse:
+        logger.exception("Unhandled gateway error: %s", type(exc).__name__)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "message": "Internal gateway error. Please retry later.",
+                    "type": "internal_server_error",
+                    "code": "internal_error",
+                }
+            },
+        )
 
     # Expose components on app.state for programmatic inspection & testing
     app.state.settings = cfg
@@ -181,13 +207,30 @@ def create_app(
         # 1. Per-client sliding-window rate limiting
         client_id = payload.user or (request.client.host if request.client else "anonymous")
         if not rate_limiter.allow(client_id):
+            retry_after = rate_limiter.retry_after_seconds(client_id)
             return JSONResponse(
                 status_code=429,
+                headers={"Retry-After": str(retry_after)},
                 content={
                     "error": {
                         "message": f"Rate limit exceeded ({cfg.rate_limit_rpm} requests/minute).",
                         "type": "rate_limit_exceeded",
                         "code": "rate_limit_exceeded",
+                    }
+                },
+            )
+
+        if payload.stream:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": {
+                        "message": (
+                            "Streaming responses (stream=true) are not supported by this "
+                            "gateway version. Set stream=false."
+                        ),
+                        "type": "invalid_request_error",
+                        "code": "streaming_not_supported",
                     }
                 },
             )
@@ -221,23 +264,23 @@ def create_app(
             req_provider, payload.model
         )
 
-        # 2. Extract user prompt text for guardrail & PII analysis
-        user_contents = [m.content for m in payload.messages if m.role == "user"]
+        # 2. Extract user and tool prompt text for guardrail & PII analysis
+        inspected_contents = [m.content for m in payload.messages if m.role in ("user", "tool")]
         combined_user_text = (
-            "\n".join(user_contents) if user_contents else payload.messages[-1].content
+            "\n".join(inspected_contents) if inspected_contents else payload.messages[-1].content
         )
         system_prompt = "\n".join(m.content for m in payload.messages if m.role == "system")
 
         guard_eval = guardrails.evaluate(combined_user_text, policy_mode=policy_mode)
 
-        # 3. Always scan PII so audit logs never store raw sensitive values
+        # 3. Always scan PII so audit logs and semantic cache never store raw sensitive values
         vault = PIIVault()
         all_pii_entities = []
         redacted_messages: list[ChatMessage] = []
         redacted_user_parts: list[str] = []
 
         for msg in payload.messages:
-            if msg.role == "user":
+            if msg.role in ("user", "tool"):
                 candidate_text = (
                     guardrails.evaluate(msg.content, policy_mode=policy_mode).sanitized_text
                     if guard_eval.action == "redact"
@@ -251,7 +294,12 @@ def create_app(
             else:
                 redacted_messages.append(msg)
 
-        redacted_prompt_preview = " | ".join(redacted_user_parts) or payload.messages[-1].content
+        if redacted_user_parts:
+            redacted_prompt_preview = " | ".join(redacted_user_parts)
+        else:
+            fallback_pii = redactor.redact(payload.messages[-1].content, vault=vault)
+            all_pii_entities.extend(fallback_pii.entities)
+            redacted_prompt_preview = fallback_pii.redacted_text
         pii_types = [e.entity_type for e in all_pii_entities]
 
         # 4. Enforce block policy before touching cache or upstream provider
@@ -299,15 +347,16 @@ def create_app(
                 },
             )
 
-        # 5. Semantic cache lookup (keyed ONLY on redacted prompt so raw PII is never cached)
+        # 5. Semantic cache lookup (keyed ONLY on redacted prompt; bypassed if raw PII was sent)
         cache_key_prompt = (
-            "\n".join(redacted_user_parts) if redacted_user_parts else combined_user_text
+            "\n".join(redacted_user_parts) if redacted_user_parts else redacted_prompt_preview
         )
+        can_use_cache = use_cache and (redact_pii or not all_pii_entities)
         cache_hit = False
         cache_similarity: float | None = None
         warnings = list(guard_eval.warnings)
 
-        if use_cache:
+        if can_use_cache:
             cached = cache.lookup(
                 prompt=cache_key_prompt,
                 model=resolved_model,
@@ -326,13 +375,29 @@ def create_app(
             prompt_tokens = cached.prompt_tokens_est
             completion_tokens = cached.completion_tokens_est
         else:
-            provider_result = await router.generate(
-                messages=redacted_messages,
-                requested_provider=req_provider,
-                requested_model=payload.model,
-                temperature=payload.temperature,
-                max_tokens=payload.max_tokens,
-            )
+            try:
+                provider_result = await router.generate(
+                    messages=redacted_messages,
+                    requested_provider=req_provider,
+                    requested_model=payload.model,
+                    temperature=payload.temperature,
+                    max_tokens=payload.max_tokens,
+                )
+            except (httpx.HTTPError, RuntimeError, ValueError) as exc:
+                safe_detail = _format_safe_provider_error(exc)
+                return JSONResponse(
+                    status_code=502,
+                    content={
+                        "error": {
+                            "message": (
+                                f"Upstream provider '{resolved_provider}' failed "
+                                f"({safe_detail})."
+                            ),
+                            "type": "upstream_provider_error",
+                            "code": "upstream_unavailable",
+                        }
+                    },
+                )
             assistant_text = provider_result.content
             actual_provider = provider_result.provider
             actual_model = provider_result.model
@@ -341,7 +406,7 @@ def create_app(
             if provider_result.warning:
                 warnings.append(provider_result.warning)
 
-            if use_cache:
+            if can_use_cache and not provider_result.fallback_used:
                 cache.store(
                     prompt=cache_key_prompt,
                     response_text=assistant_text,
@@ -430,7 +495,7 @@ def create_app(
     @app.get("/v1/audit", response_model=list[AuditRecord], tags=["Observability"])
     async def get_audit_logs(
         limit: int = Query(default=50, ge=1, le=500),
-        action: str | None = Query(default=None),
+        action: PolicyMode | None = Query(default=None),
     ) -> list[AuditRecord]:
         return telemetry.get_recent_audits(limit=limit, action=action)
 

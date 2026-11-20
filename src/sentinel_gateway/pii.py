@@ -163,6 +163,8 @@ def validate_indonesian_nik(nik: str) -> tuple[bool, dict[str, Any]]:
 
     if actual_day > _DAYS_IN_MONTH[month]:
         return False, {}
+    if month == 2 and actual_day == 29 and int(year_short) % 4 != 0:
+        return False, {}
 
     return True, {
         "province_code": province_code,
@@ -210,26 +212,38 @@ class PIIVault:
     _value_to_placeholder: dict[tuple[str, str], str] = field(default_factory=dict)
     _type_counters: dict[str, int] = field(default_factory=dict)
 
-    def register(self, entity_type: str, raw_value: str) -> str:
+    def register(self, entity_type: str, raw_value: str, avoid_text: str = "") -> str:
         """Assign or reuse a deterministic placeholder such as ``<NIK_1>``."""
         key = (entity_type, raw_value)
         if key in self._value_to_placeholder:
             return self._value_to_placeholder[key]
         count = self._type_counters.get(entity_type, 0) + 1
-        self._type_counters[entity_type] = count
         placeholder = f"<{entity_type}_{count}>"
+        while placeholder in self._placeholder_to_value or (
+            avoid_text and placeholder in avoid_text
+        ):
+            count += 1
+            placeholder = f"<{entity_type}_{count}>"
+        self._type_counters[entity_type] = count
         self._value_to_placeholder[key] = placeholder
         self._placeholder_to_value[placeholder] = raw_value
         return placeholder
 
     def restore(self, text: str) -> tuple[str, int]:
-        """Replace placeholders in ``text`` with original values from the vault."""
-        restored = text
+        """Atomically replace placeholders in ``text`` with original values from the vault."""
+        if not self._placeholder_to_value or not text:
+            return text, 0
+        pattern = re.compile(
+            "|".join(re.escape(ph) for ph in self._placeholder_to_value)
+        )
         replacements = 0
-        for placeholder, original in self._placeholder_to_value.items():
-            if placeholder in restored:
-                restored = restored.replace(placeholder, original)
-                replacements += 1
+
+        def _replace(match: re.Match[str]) -> str:
+            nonlocal replacements
+            replacements += 1
+            return self._placeholder_to_value[match.group(0)]
+
+        restored = pattern.sub(_replace, text)
         return restored, replacements
 
     def __len__(self) -> int:
@@ -318,6 +332,12 @@ class PIIRedactor:
             prefix_window = text[max(0, start - 32) : start]
             is_formatted = (" " in raw) or ("-" in raw)
             has_card_context = bool(_CARD_CONTEXT_RE.search(prefix_window))
+            if (
+                not is_formatted
+                and not has_card_context
+                and _NON_PII_PREFIX_RE.search(prefix_window)
+            ):
+                continue
             has_nik_context = bool(_NIK_CONTEXT_RE.search(prefix_window))
             nik_valid, _ = validate_indonesian_nik(digits) if len(digits) == 16 else (False, {})
 
@@ -390,6 +410,9 @@ class PIIRedactor:
             digits = re.sub(r"\D", "", raw)
             if not (10 <= len(digits) <= 16):
                 continue
+            bank_prefix = text[max(0, match.start(1) - 16) : match.start(1)]
+            if _NON_PII_PREFIX_RE.search(bank_prefix):
+                continue
             candidates.append(
                 _CandidateSpan(
                     entity_type="BANK_ACCOUNT",
@@ -448,7 +471,7 @@ class PIIRedactor:
         entities: list[PIIEntity] = []
         cursor = 0
         for span in resolved:
-            placeholder = active_vault.register(span.entity_type, span.value)
+            placeholder = active_vault.register(span.entity_type, span.value, avoid_text=text)
             parts.append(text[cursor : span.start])
             parts.append(placeholder)
             cursor = span.end

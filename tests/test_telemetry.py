@@ -83,4 +83,17 @@ class TestRateLimiter:
         assert limiter.allow("client-a") is True
         assert limiter.allow("client-a") is True
         assert limiter.allow("client-a") is False
+        assert limiter.retry_after_seconds("client-a") >= 1
         assert limiter.allow("client-b") is True
+
+    def test_evicts_stale_client_buckets(self) -> None:
+        limiter = SlidingWindowRateLimiter(max_requests_per_minute=5, max_tracked_clients=2)
+        assert limiter.allow("stale-1") is True
+        assert limiter.allow("stale-2") is True
+        # Simulate timestamps older than 60s window
+        limiter._buckets["stale-1"][0] -= 120.0
+        limiter._buckets["stale-2"][0] -= 120.0
+        assert limiter.allow("fresh-client") is True
+        assert "stale-1" not in limiter._buckets
+        assert "stale-2" not in limiter._buckets
+        assert "fresh-client" in limiter._buckets

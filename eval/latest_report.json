@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-19T18:32:20.007153+00:00",
+  "generated_at": "2026-11-20T05:11:10.633213+00:00",
   "pii_benchmark": {
     "total_cases": 40,
     "negative_trap_cases": 15,
@@ -10,7 +10,7 @@
     "recall": 1.0,
     "f1": 1.0,
     "negative_case_fpr": 0.0,
-    "avg_latency_ms": 0.031,
+    "avg_latency_ms": 2.224,
     "per_entity_type": {
       "NIK": {
         "tp": 8,
@@ -63,7 +63,7 @@
     "recall": 1.0,
     "f1": 1.0,
     "false_positive_rate": 0.0,
-    "avg_latency_ms": 0.048,
+    "avg_latency_ms": 2.389,
     "errors": []
   },
   "cache_benchmark": {
@@ -82,9 +82,9 @@
     "false_positive_rate": 0.0,
     "avg_paraphrase_similarity": 0.9714,
     "avg_distinct_similarity": 0.0593,
-    "avg_uncached_latency_ms": 27.469,
-    "avg_cache_hit_latency_ms": 2.772,
-    "latency_speedup_x": 9.91,
+    "avg_uncached_latency_ms": 30.835,
+    "avg_cache_hit_latency_ms": 28.244,
+    "latency_speedup_x": 1.09,
     "errors": []
   }
 }

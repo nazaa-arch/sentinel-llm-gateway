@@ -17,19 +17,38 @@ from sentinel_gateway.schemas import AuditRecord, MetricsSummary
 
 
 class SlidingWindowRateLimiter:
-    """In-memory per-client sliding-window RPM rate limiter."""
+    """In-memory per-client sliding-window RPM rate limiter with idle-bucket eviction."""
 
-    def __init__(self, max_requests_per_minute: int = 120) -> None:
+    def __init__(
+        self,
+        max_requests_per_minute: int = 120,
+        max_tracked_clients: int = 10_000,
+    ) -> None:
         self.max_rpm = max_requests_per_minute
+        self.max_tracked_clients = max_tracked_clients
         self._lock = threading.Lock()
         self._buckets: dict[str, deque[float]] = {}
+
+    def _evict_stale_locked(self, cutoff: float) -> None:
+        stale_keys = [
+            key
+            for key, timestamps in self._buckets.items()
+            if not timestamps or timestamps[-1] < cutoff
+        ]
+        for key in stale_keys:
+            del self._buckets[key]
 
     def allow(self, client_key: str) -> bool:
         """Return True if client is within RPM quota, False otherwise."""
         now = time.monotonic()
         cutoff = now - 60.0
         with self._lock:
-            bucket = self._buckets.setdefault(client_key, deque())
+            if len(self._buckets) >= self.max_tracked_clients:
+                self._evict_stale_locked(cutoff)
+            bucket = self._buckets.get(client_key)
+            if bucket is None:
+                bucket = deque()
+                self._buckets[client_key] = bucket
             while bucket and bucket[0] < cutoff:
                 bucket.popleft()
             if len(bucket) >= self.max_rpm:
@@ -37,21 +56,46 @@ class SlidingWindowRateLimiter:
             bucket.append(now)
             return True
 
+    def retry_after_seconds(self, client_key: str) -> int:
+        """Return whole seconds until the oldest request in the client's window expires."""
+        now = time.monotonic()
+        with self._lock:
+            bucket = self._buckets.get(client_key)
+            if not bucket:
+                return 1
+            remaining = max(1.0, 60.0 - (now - bucket[0]))
+            return int(remaining) + (1 if remaining % 1 > 0 else 0)
+
 
 class TelemetryStore:
     """SQLite audit log and real-time gateway observability aggregator."""
 
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
-        self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
-        self._conn.execute("PRAGMA journal_mode=WAL;")
-        self._init_schema()
+        self._conn: sqlite3.Connection | None = None
 
-    def _init_schema(self) -> None:
+    def _ensure_connected(self) -> sqlite3.Connection:
+        """Lazily open the SQLite connection and initialize schema under lock."""
+        if self._conn is not None:
+            return self._conn
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(self.db_path), timeout=30.0, check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA busy_timeout=5000;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        self._conn = conn
+        self._init_schema(conn)
+        return conn
+
+    def initialize(self) -> None:
+        """Eagerly initialize the underlying SQLite connection and schema."""
         with self._lock:
-            self._conn.execute(
+            self._ensure_connected()
+
+    def _init_schema(self, conn: sqlite3.Connection) -> None:
+        with conn:
+            conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS audit_logs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,13 +118,12 @@ class TelemetryStore:
                 );
                 """
             )
-            self._conn.execute(
+            conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_logs (timestamp DESC);"
             )
-            self._conn.execute(
+            conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_logs (action_taken);"
             )
-            self._conn.commit()
 
     def record(
         self,
@@ -114,42 +157,44 @@ class TelemetryStore:
 
         preview = redacted_prompt_preview.replace("\n", " ").strip()[:180]
         with self._lock:
-            cur = self._conn.execute(
-                """
-                INSERT INTO audit_logs (
-                    timestamp, provider, model, latency_ms, prompt_tokens_est,
-                    completion_tokens_est, estimated_cost_usd, estimated_cost_saved_usd,
-                    cache_hit, cache_similarity, pii_count, pii_types_json,
-                    injection_score, toxicity_score, action_taken, redacted_prompt_preview
+            conn = self._ensure_connected()
+            with conn:
+                cur = conn.execute(
+                    """
+                    INSERT INTO audit_logs (
+                        timestamp, provider, model, latency_ms, prompt_tokens_est,
+                        completion_tokens_est, estimated_cost_usd, estimated_cost_saved_usd,
+                        cache_hit, cache_similarity, pii_count, pii_types_json,
+                        injection_score, toxicity_score, action_taken, redacted_prompt_preview
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        timestamp,
+                        provider,
+                        model,
+                        round(latency_ms, 3),
+                        prompt_tokens_est,
+                        completion_tokens_est,
+                        actual_cost,
+                        saved_cost,
+                        1 if cache_hit else 0,
+                        cache_similarity,
+                        pii_count,
+                        json.dumps(sorted(set(pii_types))),
+                        round(injection_score, 4),
+                        round(toxicity_score, 4),
+                        action_taken,
+                        preview,
+                    ),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    timestamp,
-                    provider,
-                    model,
-                    round(latency_ms, 3),
-                    prompt_tokens_est,
-                    completion_tokens_est,
-                    actual_cost,
-                    saved_cost,
-                    1 if cache_hit else 0,
-                    cache_similarity,
-                    pii_count,
-                    json.dumps(sorted(set(pii_types))),
-                    round(injection_score, 4),
-                    round(toxicity_score, 4),
-                    action_taken,
-                    preview,
-                ),
-            )
-            self._conn.commit()
             return int(cur.lastrowid)
 
     def get_metrics(self) -> MetricsSummary:
         """Compute live p50/p95 latency, cache hit rate, block rate, and FinOps savings."""
         with self._lock:
-            rows = self._conn.execute(
+            conn = self._ensure_connected()
+            rows = conn.execute(
                 """
                 SELECT provider, latency_ms, estimated_cost_usd, estimated_cost_saved_usd,
                        cache_hit, pii_count, action_taken
@@ -218,8 +263,9 @@ class TelemetryStore:
         """Fetch most recent audit records, optionally filtered by policy action."""
         safe_limit = max(1, min(limit, 500))
         with self._lock:
+            conn = self._ensure_connected()
             if action:
-                rows = self._conn.execute(
+                rows = conn.execute(
                     """
                     SELECT id, timestamp, provider, model, latency_ms, prompt_tokens_est,
                            completion_tokens_est, estimated_cost_usd, cache_hit, cache_similarity,
@@ -233,7 +279,7 @@ class TelemetryStore:
                     (action, safe_limit),
                 ).fetchall()
             else:
-                rows = self._conn.execute(
+                rows = conn.execute(
                     """
                     SELECT id, timestamp, provider, model, latency_ms, prompt_tokens_est,
                            completion_tokens_est, estimated_cost_usd, cache_hit, cache_similarity,
@@ -270,4 +316,12 @@ class TelemetryStore:
 
     def close(self) -> None:
         with self._lock:
-            self._conn.close()
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
+
+    def __enter__(self) -> TelemetryStore:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()

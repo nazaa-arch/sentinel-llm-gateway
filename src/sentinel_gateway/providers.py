@@ -25,6 +25,7 @@ MODEL_PRICING_PER_1K: dict[str, tuple[float, float]] = {
 }
 
 _PLACEHOLDER_RE = re.compile(r"<(?:NIK|PHONE|EMAIL|CARD|NPWP|BANK_ACCOUNT|MENTION)_\d+>")
+_GEMINI_MODEL_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
 _INDONESIAN_HINTS = re.compile(
     r"(?i)\b(?:apa|bagaimana|jelaskan|tolong|saya|anda|yang|untuk|dengan|tidak|keamanan|"
@@ -203,7 +204,7 @@ class OllamaProvider:
             resp.raise_for_status()
             data = resp.json()
 
-        content = data.get("message", {}).get("content", "")
+        content = (data.get("message") or {}).get("content") or ""
         prompt_tokens = int(data.get("prompt_eval_count") or estimate_messages_tokens(messages))
         completion_tokens = int(data.get("eval_count") or estimate_tokens(content))
         return ProviderResult(
@@ -229,6 +230,9 @@ class GeminiProvider:
         temperature: float = 0.2,
         max_tokens: int | None = 512,
     ) -> ProviderResult:
+        if not _GEMINI_MODEL_RE.fullmatch(model):
+            raise ValueError("Invalid Gemini model identifier")
+
         system_parts = [m.content for m in messages if m.role == "system"]
         contents = []
         for msg in messages:
@@ -236,6 +240,11 @@ class GeminiProvider:
                 continue
             role = "model" if msg.role == "assistant" else "user"
             contents.append({"role": role, "parts": [{"text": msg.content}]})
+
+        if not contents:
+            fallback_text = "\n".join(system_parts) if system_parts else ""
+            contents.append({"role": "user", "parts": [{"text": fallback_text}]})
+            system_parts = []
 
         payload: dict[str, Any] = {
             "contents": contents,
@@ -248,17 +257,21 @@ class GeminiProvider:
 
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{model}:generateContent?key={self.api_key}"
+            f"{model}:generateContent"
         )
+        headers = {
+            "x-goog-api-key": self.api_key,
+            "Content-Type": "application/json",
+        }
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            resp = await client.post(url, json=payload)
+            resp = await client.post(url, json=payload, headers=headers)
             resp.raise_for_status()
             data = resp.json()
 
-        candidates = data.get("candidates", [])
-        parts = candidates[0].get("content", {}).get("parts", []) if candidates else []
-        content = "".join(p.get("text", "") for p in parts)
-        usage = data.get("usageMetadata", {})
+        candidates = data.get("candidates") or []
+        parts = ((candidates[0].get("content") or {}).get("parts") or []) if candidates else []
+        content = "".join(p.get("text") or "" for p in parts if isinstance(p, dict))
+        usage = data.get("usageMetadata") or {}
         prompt_tokens = int(usage.get("promptTokenCount") or estimate_messages_tokens(messages))
         completion_tokens = int(usage.get("candidatesTokenCount") or estimate_tokens(content))
         return ProviderResult(
@@ -304,18 +317,31 @@ class OpenAIProvider:
             resp.raise_for_status()
             data = resp.json()
 
-        choices = data.get("choices", [])
-        content = choices[0].get("message", {}).get("content", "") if choices else ""
-        usage = data.get("usage", {})
+        choices = data.get("choices") or []
+        content = ((choices[0].get("message") or {}).get("content") or "") if choices else ""
+        usage = data.get("usage") or {}
         prompt_tokens = int(usage.get("prompt_tokens") or estimate_messages_tokens(messages))
         completion_tokens = int(usage.get("completion_tokens") or estimate_tokens(content))
         return ProviderResult(
             content=content,
             provider="openai",
-            model=data.get("model", model),
+            model=data.get("model") or model,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )
+
+
+def _format_safe_provider_error(exc: Exception) -> str:
+    """Return a sanitized error summary that never leaks API keys, URLs, or stack traces."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"upstream HTTP {exc.response.status_code}"
+    if isinstance(exc, httpx.TimeoutException):
+        return "upstream request timed out"
+    if isinstance(exc, httpx.RequestError):
+        return "upstream connection failed"
+    if isinstance(exc, (RuntimeError, ValueError)):
+        return str(exc)
+    return type(exc).__name__
 
 
 class ProviderRouter:
@@ -391,8 +417,8 @@ class ProviderRouter:
                 completion_tokens=fallback.completion_tokens,
                 fallback_used=True,
                 warning=(
-                    f"Upstream provider '{provider}' unavailable ({exc}); "
-                    "fell back to local-demo."
+                    f"Upstream provider '{provider}' unavailable "
+                    f"({_format_safe_provider_error(exc)}); fell back to local-demo."
                 ),
             )
 

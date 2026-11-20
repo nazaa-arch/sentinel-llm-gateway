@@ -29,6 +29,8 @@ _HOMOGLYPH_MAP = str.maketrans(
         "\u0445": "x",  # Cyrillic x
         "\u0443": "y",  # Cyrillic y
         "\u0456": "i",  # Cyrillic i
+        "\u0455": "s",  # Cyrillic dze
+        "\u0458": "j",  # Cyrillic je
         "\u0410": "A",
         "\u0415": "E",
         "\u041e": "O",
@@ -37,6 +39,8 @@ _HOMOGLYPH_MAP = str.maketrans(
         "\u0425": "X",
         "\u03bf": "o",  # Greek omicron
         "\u03b1": "a",  # Greek alpha
+        "\u03b5": "e",  # Greek epsilon
+        "\u03c1": "p",  # Greek rho
     }
 )
 
@@ -305,25 +309,43 @@ def decode_leetspeak(text: str) -> str:
     return text.translate(_LEET_MAP)
 
 
-def extract_base64_payloads(text: str) -> list[tuple[str, str]]:
-    """Detect and decode printable UTF-8 base64 payloads embedded in text."""
+def extract_base64_payloads(
+    text: str,
+    max_depth: int = 2,
+    max_candidates: int = 20,
+    max_token_len: int = 4096,
+) -> list[tuple[str, str]]:
+    """Detect and recursively decode printable UTF-8 base64 payloads embedded in text."""
     decoded_items: list[tuple[str, str]] = []
-    for match in _BASE64_CANDIDATE_RE.finditer(text):
-        token = match.group(1)
-        if len(token) % 4 == 1:
-            continue
-        padded = token + ("=" * ((4 - len(token) % 4) % 4))
-        try:
-            raw = base64.b64decode(padded, validate=True)
-            decoded = raw.decode("utf-8")
-        except Exception:
-            continue
-        # Only inspect human-readable text payloads
-        printable_ratio = sum(1 for ch in decoded if ch.isprintable() or ch.isspace()) / max(
-            1, len(decoded)
-        )
-        if len(decoded.strip()) >= 12 and printable_ratio >= 0.90:
-            decoded_items.append((token, decoded))
+    seen_tokens: set[str] = set()
+
+    def _decode_layer(current_text: str, depth: int, root_token: str | None = None) -> None:
+        if depth <= 0 or len(decoded_items) >= max_candidates:
+            return
+        for match in _BASE64_CANDIDATE_RE.finditer(current_text):
+            if len(decoded_items) >= max_candidates:
+                break
+            token = match.group(1)
+            if len(token) > max_token_len or len(token) % 4 == 1 or token in seen_tokens:
+                continue
+            seen_tokens.add(token)
+            padded = token + ("=" * ((4 - len(token) % 4) % 4))
+            try:
+                raw = base64.b64decode(padded, validate=True)
+                decoded = raw.decode("utf-8")
+            except Exception:
+                continue
+            # Only inspect human-readable text payloads
+            printable_ratio = sum(1 for ch in decoded if ch.isprintable() or ch.isspace()) / max(
+                1, len(decoded)
+            )
+            if len(decoded.strip()) >= 12 and printable_ratio >= 0.90:
+                outer = root_token or token
+                decoded_items.append((outer, decoded))
+                if depth > 1:
+                    _decode_layer(decoded, depth - 1, root_token=outer)
+
+    _decode_layer(text, max_depth)
     return decoded_items
 
 
@@ -361,12 +383,12 @@ class GuardrailsEngine:
     ) -> list[GuardSignal]:
         signals: list[GuardSignal] = []
         for rule in rules:
-            rule_key = f"{rule.rule_id}{suffix}"
-            if rule_key in seen_rule_ids:
+            if rule.rule_id in seen_rule_ids:
                 continue
             match = rule.pattern.search(text)
             if match:
-                seen_rule_ids.add(rule_key)
+                seen_rule_ids.add(rule.rule_id)
+                rule_key = f"{rule.rule_id}{suffix}"
                 snippet = match.group(0)[:120]
                 signals.append(
                     GuardSignal(
@@ -379,12 +401,15 @@ class GuardrailsEngine:
                 )
         return signals
 
-    def _sanitize_prompt(self, text: str) -> str:
+    def _sanitize_prompt(self, text: str, malicious_b64_tokens: set[str] | None = None) -> str:
         """Remove matched injection directives/delimiters for ``redact`` policy mode."""
         sanitized = text
         for rule in INJECTION_RULES:
             if rule.sanitize_span:
                 sanitized = rule.pattern.sub("[REDACTED_DIRECTIVE]", sanitized)
+        if malicious_b64_tokens:
+            for token in malicious_b64_tokens:
+                sanitized = sanitized.replace(token, "[REDACTED_ENCODED_PAYLOAD]")
         return sanitized
 
     def evaluate(
@@ -395,6 +420,7 @@ class GuardrailsEngine:
         """Run multi-layer inspection and return risk scores and policy action."""
         signals: list[GuardSignal] = []
         seen: set[str] = set()
+        malicious_b64_tokens: set[str] = set()
 
         # Layer 1: Unicode NFKC + zero-width + homoglyph normalization
         normalized, was_unicode_obfuscated = normalize_obfuscated_text(text)
@@ -411,38 +437,48 @@ class GuardrailsEngine:
             leet_inj = self._scan_rules(
                 leet_text, INJECTION_RULES, seen, weight_multiplier=0.95, suffix="_LEET"
             )
-            if leet_inj:
+            leet_tox = self._scan_rules(
+                leet_text, TOXICITY_RULES, seen, weight_multiplier=0.95, suffix="_LEET"
+            )
+            if leet_inj or leet_tox:
                 signals.extend(leet_inj)
+                signals.extend(leet_tox)
+                first_leet = leet_inj[0] if leet_inj else leet_tox[0]
                 signals.append(
                     GuardSignal(
                         category="obfuscation",
                         rule_id="OBF_LEETSPEAK",
-                        description="Leetspeak obfuscation used to conceal injection directive",
+                        description="Leetspeak obfuscation used to conceal adversarial directive",
                         weight=0.30,
-                        matched_snippet=leet_inj[0].matched_snippet,
+                        matched_snippet=first_leet.matched_snippet,
                     )
                 )
 
-        # Layer 4: Base64 payload decoding scan
+        # Layer 4: Recursive Base64 payload decoding scan
+        b64_flagged = False
         for raw_b64, decoded_payload in extract_base64_payloads(normalized):
+            decoded_norm, _ = normalize_obfuscated_text(decoded_payload)
             b64_inj = self._scan_rules(
-                decoded_payload, INJECTION_RULES, seen, weight_multiplier=1.0, suffix="_B64"
+                decoded_norm, INJECTION_RULES, seen, weight_multiplier=1.0, suffix="_B64"
             )
             b64_tox = self._scan_rules(
-                decoded_payload, TOXICITY_RULES, seen, weight_multiplier=1.0, suffix="_B64"
+                decoded_norm, TOXICITY_RULES, seen, weight_multiplier=1.0, suffix="_B64"
             )
             if b64_inj or b64_tox:
+                malicious_b64_tokens.add(raw_b64)
                 signals.extend(b64_inj)
                 signals.extend(b64_tox)
-                signals.append(
-                    GuardSignal(
-                        category="obfuscation",
-                        rule_id="OBF_BASE64_PAYLOAD",
-                        description="Base64-encoded adversarial payload detected",
-                        weight=0.40,
-                        matched_snippet=f"{raw_b64[:36]}... -> {decoded_payload[:60]}",
+                if not b64_flagged:
+                    b64_flagged = True
+                    signals.append(
+                        GuardSignal(
+                            category="obfuscation",
+                            rule_id="OBF_BASE64_PAYLOAD",
+                            description="Base64-encoded adversarial payload detected",
+                            weight=0.40,
+                            matched_snippet=f"{raw_b64[:36]}... -> {decoded_payload[:60]}",
+                        )
                     )
-                )
 
         if was_unicode_obfuscated and any(s.category == "prompt_injection" for s in signals):
             signals.append(
@@ -498,7 +534,7 @@ class GuardrailsEngine:
             elif policy_mode == "redact":
                 action = "redact"
                 allowed = True
-                sanitized_text = self._sanitize_prompt(normalized)
+                sanitized_text = self._sanitize_prompt(normalized, malicious_b64_tokens)
                 warnings.append("Adversarial directives sanitized under redact policy mode")
             elif policy_mode == "warn":
                 action = "warn"

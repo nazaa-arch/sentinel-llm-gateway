@@ -657,17 +657,20 @@
       "cache-2": "Can you explain semantic caching and how it cuts LLM response latency and pricing?"
     };
 
+    const ALLOWED_ACTIONS = new Set(["allow", "redact", "warn", "block"]);
+
     function escapeHtml(str) {
       return String(str)
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;");
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
     }
 
     function actionBadge(action) {
-      const cls = `badge-${action || "allow"}`;
-      return `<span class="badge ${cls}">${escapeHtml(action || "allow")}</span>`;
+      const normalized = ALLOWED_ACTIONS.has(action) ? action : "allow";
+      return `<span class="badge badge-${normalized}">${escapeHtml(normalized)}</span>`;
     }
 
     // Tab switching
@@ -744,7 +747,7 @@
           document.getElementById("trace-redacted").textContent = "[Blocked before upstream dispatch]";
           const sigs = s.signals || [];
           document.getElementById("trace-chips").innerHTML = sigs.length
-            ? sigs.map((sig) => `<span class="chip" style="color:var(--red);border-color:rgba(248,113,113,0.4);background:rgba(248,113,113,0.12);">${escapeHtml(sig.rule_id)} (${sig.weight})</span>`).join("")
+            ? sigs.map((sig) => `<span class="chip" style="color:var(--red);border-color:rgba(248,113,113,0.4);background:rgba(248,113,113,0.12);">${escapeHtml(sig.rule_id)} (${escapeHtml(Number(sig.weight ?? 0).toFixed(2))})</span>`).join("")
             : `<span class="empty">No signals</span>`;
         } else {
           const reply = data.choices?.[0]?.message?.content || "";
@@ -752,12 +755,12 @@
           respBox.textContent = reply;
           document.getElementById("trace-action").innerHTML = actionBadge(s.action_taken);
           document.getElementById("trace-cache").innerHTML = s.cache_hit
-            ? `<span class="badge badge-hit">HIT (${s.cache_similarity})</span>`
+            ? `<span class="badge badge-hit">HIT (${escapeHtml(s.cache_similarity ?? "")})</span>`
             : `<span class="badge badge-miss">MISS</span>`;
           document.getElementById("trace-latency").textContent = `${s.latency_ms} ms`;
           document.getElementById("trace-pii").textContent = `${s.pii_detected} / ${s.pii_restored ? "restored" : "masked"}`;
-          document.getElementById("trace-inj").textContent = s.injection_score.toFixed(2);
-          document.getElementById("trace-tox").textContent = s.toxicity_score.toFixed(2);
+          document.getElementById("trace-inj").textContent = Number(s.injection_score ?? 0).toFixed(2);
+          document.getElementById("trace-tox").textContent = Number(s.toxicity_score ?? 0).toFixed(2);
           document.getElementById("trace-redacted").textContent = s.redacted_prompt_preview || "—";
 
           const chips = (s.pii_entities || []).map(
@@ -786,96 +789,119 @@
       const text = document.getElementById("inspect-input").value.trim();
       if (!text) return;
 
-      const res = await fetch("/v1/guard/inspect", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text,
-          policy_mode: document.getElementById("inspect-policy").value,
-          redact_pii: document.getElementById("inspect-redact").checked,
-        }),
-      });
-      const data = await res.json();
+      try {
+        const res = await fetch("/v1/guard/inspect", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text,
+            policy_mode: document.getElementById("inspect-policy").value,
+            redact_pii: document.getElementById("inspect-redact").checked,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          document.getElementById("inspect-redacted").textContent =
+            `Inspection error (${res.status}): ${data.detail || data.error?.message || "Invalid request"}`;
+          return;
+        }
 
-      document.getElementById("inspect-redacted").textContent = data.redacted_text;
-      document.getElementById("inspect-verdict").innerHTML =
-        `${actionBadge(data.action)} <span class="mono" style="margin-left:6px;color:var(--text-muted);">${data.latency_ms} ms</span>`;
+        const injScore = Number(data.injection_score ?? 0);
+        const toxScore = Number(data.toxicity_score ?? 0);
 
-      document.getElementById("m-inj-val").textContent = data.injection_score.toFixed(2);
-      document.getElementById("m-inj-bar").style.width = `${Math.min(100, data.injection_score * 100)}%`;
-      document.getElementById("m-tox-val").textContent = data.toxicity_score.toFixed(2);
-      document.getElementById("m-tox-bar").style.width = `${Math.min(100, data.toxicity_score * 100)}%`;
+        document.getElementById("inspect-redacted").textContent = data.redacted_text;
+        document.getElementById("inspect-verdict").innerHTML =
+          `${actionBadge(data.action)} <span class="mono" style="margin-left:6px;color:var(--text-muted);">${escapeHtml(data.latency_ms ?? 0)} ms</span>`;
 
-      const piiBody = document.getElementById("inspect-pii-tbody");
-      piiBody.innerHTML = data.pii_entities.length
-        ? data.pii_entities.map((e) => {
-            const meta = Object.entries(e.metadata || {})
-              .map(([k, v]) => `${k}: ${v}`)
-              .join(", ");
-            return `<tr>
-              <td><span class="chip">${escapeHtml(e.entity_type)}</span></td>
-              <td class="mono">${escapeHtml(e.placeholder)}</td>
-              <td class="mono">${escapeHtml(e.masked_preview)}</td>
-              <td style="color:var(--text-muted);">${escapeHtml(meta || "validated")}</td>
-            </tr>`;
-          }).join("")
-        : `<tr><td colspan="4" class="empty">No PII entities detected.</td></tr>`;
+        document.getElementById("m-inj-val").textContent = injScore.toFixed(2);
+        document.getElementById("m-inj-bar").style.width = `${Math.min(100, injScore * 100)}%`;
+        document.getElementById("m-tox-val").textContent = toxScore.toFixed(2);
+        document.getElementById("m-tox-bar").style.width = `${Math.min(100, toxScore * 100)}%`;
 
-      const sigBody = document.getElementById("inspect-sig-tbody");
-      sigBody.innerHTML = data.signals.length
-        ? data.signals.map((s) => `<tr>
-            <td class="mono">${escapeHtml(s.rule_id)}</td>
-            <td class="mono">${s.weight.toFixed(2)}</td>
-            <td>${escapeHtml(s.description)}</td>
-          </tr>`).join("")
-        : `<tr><td colspan="3" class="empty">No guardrail threats detected.</td></tr>`;
+        const piiBody = document.getElementById("inspect-pii-tbody");
+        piiBody.innerHTML = data.pii_entities.length
+          ? data.pii_entities.map((e) => {
+              const meta = Object.entries(e.metadata || {})
+                .map(([k, v]) => `${k}: ${v}`)
+                .join(", ");
+              return `<tr>
+                <td><span class="chip">${escapeHtml(e.entity_type)}</span></td>
+                <td class="mono">${escapeHtml(e.placeholder)}</td>
+                <td class="mono">${escapeHtml(e.masked_preview)}</td>
+                <td style="color:var(--text-muted);">${escapeHtml(meta || "validated")}</td>
+              </tr>`;
+            }).join("")
+          : `<tr><td colspan="4" class="empty">No PII entities detected.</td></tr>`;
+
+        const sigBody = document.getElementById("inspect-sig-tbody");
+        sigBody.innerHTML = data.signals.length
+          ? data.signals.map((s) => `<tr>
+              <td class="mono">${escapeHtml(s.rule_id)}</td>
+              <td class="mono">${escapeHtml(Number(s.weight ?? 0).toFixed(2))}</td>
+              <td>${escapeHtml(s.description)}</td>
+            </tr>`).join("")
+          : `<tr><td colspan="3" class="empty">No guardrail threats detected.</td></tr>`;
+      } catch (err) {
+        document.getElementById("inspect-redacted").textContent = `Request error: ${err.message}`;
+      }
     });
 
     // Telemetry & Audit Dashboard
     async function refreshTelemetry() {
       const action = document.getElementById("audit-filter").value;
-      const [mRes, aRes] = await Promise.all([
-        fetch("/v1/metrics"),
-        fetch(`/v1/audit?limit=50${action ? `&action=${encodeURIComponent(action)}` : ""}`),
-      ]);
-      const m = await mRes.json();
-      const audits = await aRes.json();
+      try {
+        const [mRes, aRes] = await Promise.all([
+          fetch("/v1/metrics"),
+          fetch(`/v1/audit?limit=50${action ? `&action=${encodeURIComponent(action)}` : ""}`),
+        ]);
+        if (!mRes.ok || !aRes.ok) {
+          return;
+        }
+        const m = await mRes.json();
+        const audits = await aRes.json();
 
-      document.getElementById("kpi-total").textContent = m.total_requests;
-      document.getElementById("kpi-breakdown").textContent =
-        `${m.allowed_requests + m.redacted_requests} passed · ${m.blocked_requests} blocked`;
-      document.getElementById("kpi-cache-rate").textContent = `${(m.cache_hit_rate * 100).toFixed(1)}%`;
-      document.getElementById("kpi-cache-hits").textContent = `${m.cache_hits} hits`;
-      document.getElementById("kpi-block-rate").textContent = `${(m.guardrail_block_rate * 100).toFixed(1)}%`;
-      document.getElementById("kpi-blocked").textContent = `${m.blocked_requests} blocked`;
-      document.getElementById("kpi-pii").textContent = m.total_pii_redacted;
-      document.getElementById("kpi-latency").textContent = `${m.p50_latency_ms} / ${m.p95_latency_ms} ms`;
-      document.getElementById("kpi-avg-lat").textContent = `avg ${m.avg_latency_ms} ms`;
-      document.getElementById("kpi-saved").textContent = `$${m.estimated_cost_saved_usd.toFixed(5)}`;
-      document.getElementById("kpi-spent").textContent = `spent $${m.total_estimated_cost_usd.toFixed(5)}`;
+        document.getElementById("kpi-total").textContent = m.total_requests;
+        document.getElementById("kpi-breakdown").textContent =
+          `${m.allowed_requests + m.redacted_requests} passed · ${m.blocked_requests} blocked`;
+        document.getElementById("kpi-cache-rate").textContent = `${(m.cache_hit_rate * 100).toFixed(1)}%`;
+        document.getElementById("kpi-cache-hits").textContent = `${m.cache_hits} hits`;
+        document.getElementById("kpi-block-rate").textContent = `${(m.guardrail_block_rate * 100).toFixed(1)}%`;
+        document.getElementById("kpi-blocked").textContent = `${m.blocked_requests} blocked`;
+        document.getElementById("kpi-pii").textContent = m.total_pii_redacted;
+        document.getElementById("kpi-latency").textContent = `${m.p50_latency_ms} / ${m.p95_latency_ms} ms`;
+        document.getElementById("kpi-avg-lat").textContent = `avg ${m.avg_latency_ms} ms`;
+        document.getElementById("kpi-saved").textContent = `$${m.estimated_cost_saved_usd.toFixed(5)}`;
+        document.getElementById("kpi-spent").textContent = `spent $${m.total_estimated_cost_usd.toFixed(5)}`;
 
-      const tbody = document.getElementById("audit-tbody");
-      tbody.innerHTML = audits.length
-        ? audits.map((r) => `<tr>
-            <td class="mono" style="white-space:nowrap;">${escapeHtml(r.timestamp.slice(11, 19))}</td>
-            <td>${actionBadge(r.action_taken)}</td>
-            <td class="mono">${escapeHtml(r.provider)}<br/><span style="color:var(--text-muted);">${escapeHtml(r.model)}</span></td>
-            <td>${r.cache_hit ? `<span class="badge badge-hit">HIT ${r.cache_similarity ?? ""}</span>` : `<span class="badge badge-miss">MISS</span>`}</td>
-            <td class="mono">${r.pii_count}${r.pii_types.length ? `<br/><span style="color:var(--text-muted);">${escapeHtml(r.pii_types.join(", "))}</span>` : ""}</td>
-            <td class="mono">${r.injection_score.toFixed(2)}</td>
-            <td class="mono" style="white-space:nowrap;">${r.latency_ms} ms</td>
-            <td class="mono" style="max-width:320px; word-break:break-word;">${escapeHtml(r.redacted_prompt_preview)}</td>
-          </tr>`).join("")
-        : `<tr><td colspan="8" class="empty">No audit records match the selected filter.</td></tr>`;
+        const tbody = document.getElementById("audit-tbody");
+        tbody.innerHTML = audits.length
+          ? audits.map((r) => `<tr>
+              <td class="mono" style="white-space:nowrap;">${escapeHtml(String(r.timestamp || "").slice(11, 19))}</td>
+              <td>${actionBadge(r.action_taken)}</td>
+              <td class="mono">${escapeHtml(r.provider)}<br/><span style="color:var(--text-muted);">${escapeHtml(r.model)}</span></td>
+              <td>${r.cache_hit ? `<span class="badge badge-hit">HIT ${escapeHtml(r.cache_similarity ?? "")}</span>` : `<span class="badge badge-miss">MISS</span>`}</td>
+              <td class="mono">${escapeHtml(r.pii_count)}${r.pii_types.length ? `<br/><span style="color:var(--text-muted);">${escapeHtml(r.pii_types.join(", "))}</span>` : ""}</td>
+              <td class="mono">${escapeHtml(Number(r.injection_score ?? 0).toFixed(2))}</td>
+              <td class="mono" style="white-space:nowrap;">${escapeHtml(r.latency_ms)} ms</td>
+              <td class="mono" style="max-width:320px; word-break:break-word;">${escapeHtml(r.redacted_prompt_preview)}</td>
+            </tr>`).join("")
+          : `<tr><td colspan="8" class="empty">No audit records match the selected filter.</td></tr>`;
 
-      refreshHealth();
+        refreshHealth();
+      } catch {
+        // Keep current dashboard state if transient network error occurs
+      }
     }
 
     document.getElementById("btn-refresh-telemetry").addEventListener("click", refreshTelemetry);
     document.getElementById("audit-filter").addEventListener("change", refreshTelemetry);
     document.getElementById("btn-clear-cache").addEventListener("click", async () => {
-      await fetch("/v1/cache", { method: "DELETE" });
-      refreshTelemetry();
+      try {
+        await fetch("/v1/cache", { method: "DELETE" });
+        refreshTelemetry();
+      } catch {
+        // Ignore transient network errors
+      }
     });
 
     // Initial load

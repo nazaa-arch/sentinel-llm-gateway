@@ -13,7 +13,7 @@ class ChatMessage(BaseModel):
     """Single OpenAI-compatible chat message."""
 
     role: Literal["system", "user", "assistant", "tool"]
-    content: str
+    content: str = Field(..., max_length=100_000)
 
 
 class SentinelOptions(BaseModel):
@@ -30,12 +30,12 @@ class SentinelOptions(BaseModel):
 class ChatCompletionRequest(BaseModel):
     """OpenAI-compatible ``/v1/chat/completions`` request payload."""
 
-    model: str | None = None
-    messages: list[ChatMessage] = Field(..., min_length=1)
+    model: str | None = Field(default=None, max_length=128)
+    messages: list[ChatMessage] = Field(..., min_length=1, max_length=128)
     temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     max_tokens: int | None = Field(default=512, ge=1, le=16384)
     stream: bool = False
-    user: str | None = None
+    user: str | None = Field(default=None, max_length=128)
     sentinel_options: SentinelOptions | None = None
 
 
@@ -110,7 +110,7 @@ class ChatCompletionResponse(BaseModel):
 class GuardInspectRequest(BaseModel):
     """Dry-run inspection request for ``/v1/guard/inspect``."""
 
-    text: str = Field(..., min_length=1)
+    text: str = Field(..., min_length=1, max_length=100_000)
     policy_mode: PolicyMode | None = None
     redact_pii: bool = True
 

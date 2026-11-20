@@ -361,19 +361,34 @@ class SemanticCache:
         max_entries: int = 2000,
     ) -> None:
         self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.default_threshold = default_threshold
         self.ttl_seconds = ttl_seconds
         self.max_entries = max_entries
         self.vectorizer = PromptVectorizer()
         self._lock = threading.RLock()
-        self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
-        self._conn.execute("PRAGMA journal_mode=WAL;")
-        self._init_schema()
+        self._conn: sqlite3.Connection | None = None
 
-    def _init_schema(self) -> None:
+    def _ensure_connected(self) -> sqlite3.Connection:
+        """Lazily open the SQLite connection and initialize schema under lock."""
+        if self._conn is not None:
+            return self._conn
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(self.db_path), timeout=30.0, check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA busy_timeout=5000;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        self._conn = conn
+        self._init_schema(conn)
+        return conn
+
+    def initialize(self) -> None:
+        """Eagerly initialize the underlying SQLite connection and schema."""
         with self._lock:
-            self._conn.execute(
+            self._ensure_connected()
+
+    def _init_schema(self, conn: sqlite3.Connection) -> None:
+        with conn:
+            conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS semantic_cache (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -392,15 +407,14 @@ class SemanticCache:
                 );
                 """
             )
-            self._conn.execute(
+            conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_cache_exact "
                 "ON semantic_cache (exact_hash, scope_key);"
             )
-            self._conn.execute(
+            conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_cache_scope_exp "
                 "ON semantic_cache (scope_key, expires_at);"
             )
-            self._conn.commit()
 
     @staticmethod
     def _make_scope_key(model: str, system_prompt: str) -> str:
@@ -411,9 +425,6 @@ class SemanticCache:
     def _make_exact_hash(scope_key: str, prompt: str) -> str:
         raw = f"{scope_key}::{normalize_for_exact_hash(prompt)}"
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-    def _purge_expired_locked(self, now: float) -> None:
-        self._conn.execute("DELETE FROM semantic_cache WHERE expires_at <= ?", (now,))
 
     def lookup(
         self,
@@ -429,10 +440,10 @@ class SemanticCache:
         now = time.time()
 
         with self._lock:
-            self._purge_expired_locked(now)
+            conn = self._ensure_connected()
 
-            # 1. Exact-hash fast path (O(1) indexed lookup)
-            row = self._conn.execute(
+            # 1. Exact-hash fast path (O(1) indexed lookup; read-only on miss)
+            row = conn.execute(
                 """
                 SELECT id, response_text, provider, model, prompt_tokens_est, completion_tokens_est
                 FROM semantic_cache
@@ -444,11 +455,11 @@ class SemanticCache:
             ).fetchone()
             if row is not None:
                 entry_id, resp, provider, cached_model, p_tok, c_tok = row
-                self._conn.execute(
-                    "UPDATE semantic_cache SET hit_count = hit_count + 1 WHERE id = ?",
-                    (entry_id,),
-                )
-                self._conn.commit()
+                with conn:
+                    conn.execute(
+                        "UPDATE semantic_cache SET hit_count = hit_count + 1 WHERE id = ?",
+                        (entry_id,),
+                    )
                 return CacheLookupResult(
                     response_text=resp,
                     similarity=1.0,
@@ -460,7 +471,7 @@ class SemanticCache:
                 )
 
             # 2. Vectorized semantic similarity lookup within same model/system scope
-            rows = self._conn.execute(
+            rows = conn.execute(
                 """
                 SELECT id, response_text, provider, model, embedding,
                        prompt_tokens_est, completion_tokens_est
@@ -473,20 +484,28 @@ class SemanticCache:
                 return None
 
             query_vec = self.vectorizer.encode(prompt)
-            matrix = np.vstack(
-                [np.frombuffer(r[4], dtype=np.float32) for r in rows]
-            )
+            valid_rows = []
+            vectors = []
+            for r in rows:
+                vec = np.frombuffer(r[4], dtype=np.float32)
+                if vec.shape == (self.vectorizer.dim,):
+                    valid_rows.append(r)
+                    vectors.append(vec)
+            if not vectors:
+                return None
+
+            matrix = np.vstack(vectors)
             similarities = matrix @ query_vec
             best_idx = int(np.argmax(similarities))
             best_sim = float(np.clip(similarities[best_idx], -1.0, 1.0))
 
             if best_sim >= active_threshold:
-                best_row = rows[best_idx]
-                self._conn.execute(
-                    "UPDATE semantic_cache SET hit_count = hit_count + 1 WHERE id = ?",
-                    (best_row[0],),
-                )
-                self._conn.commit()
+                best_row = valid_rows[best_idx]
+                with conn:
+                    conn.execute(
+                        "UPDATE semantic_cache SET hit_count = hit_count + 1 WHERE id = ?",
+                        (best_row[0],),
+                    )
                 return CacheLookupResult(
                     response_text=best_row[1],
                     similarity=round(best_sim, 4),
@@ -518,64 +537,75 @@ class SemanticCache:
         embedding = self.vectorizer.encode(prompt).tobytes()
 
         with self._lock:
-            self._purge_expired_locked(now)
-            # Replace existing exact entry to keep cache clean
-            self._conn.execute(
-                "DELETE FROM semantic_cache WHERE exact_hash = ? AND scope_key = ?",
-                (exact_hash, scope_key),
-            )
-            self._conn.execute(
-                """
-                INSERT INTO semantic_cache (
-                    exact_hash, scope_key, model, provider, prompt_text, response_text,
-                    embedding, prompt_tokens_est, completion_tokens_est, created_at, expires_at
+            conn = self._ensure_connected()
+            with conn:
+                conn.execute("DELETE FROM semantic_cache WHERE expires_at <= ?", (now,))
+                # Replace existing exact entry to keep cache clean
+                conn.execute(
+                    "DELETE FROM semantic_cache WHERE exact_hash = ? AND scope_key = ?",
+                    (exact_hash, scope_key),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    exact_hash,
-                    scope_key,
-                    model,
-                    provider,
-                    prompt,
-                    response_text,
-                    embedding,
-                    prompt_tokens_est,
-                    completion_tokens_est,
-                    now,
-                    expires_at,
-                ),
-            )
-            # Enforce max_entries cap (evict oldest entries)
-            count = self._conn.execute("SELECT COUNT(*) FROM semantic_cache").fetchone()[0]
-            if count > self.max_entries:
-                overflow = count - self.max_entries
-                self._conn.execute(
+                conn.execute(
                     """
-                    DELETE FROM semantic_cache
-                    WHERE id IN (
-                        SELECT id FROM semantic_cache ORDER BY created_at ASC LIMIT ?
+                    INSERT INTO semantic_cache (
+                        exact_hash, scope_key, model, provider, prompt_text, response_text,
+                        embedding, prompt_tokens_est, completion_tokens_est, created_at, expires_at
                     )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (overflow,),
+                    (
+                        exact_hash,
+                        scope_key,
+                        model,
+                        provider,
+                        prompt,
+                        response_text,
+                        embedding,
+                        prompt_tokens_est,
+                        completion_tokens_est,
+                        now,
+                        expires_at,
+                    ),
                 )
-            self._conn.commit()
+                # Enforce max_entries cap (evict oldest entries)
+                count = conn.execute("SELECT COUNT(*) FROM semantic_cache").fetchone()[0]
+                if count > self.max_entries:
+                    overflow = count - self.max_entries
+                    conn.execute(
+                        """
+                        DELETE FROM semantic_cache
+                        WHERE id IN (
+                            SELECT id FROM semantic_cache ORDER BY created_at ASC LIMIT ?
+                        )
+                        """,
+                        (overflow,),
+                    )
 
     def count(self) -> int:
         """Return count of active non-expired cache entries."""
         now = time.time()
         with self._lock:
-            self._purge_expired_locked(now)
-            self._conn.commit()
-            return int(self._conn.execute("SELECT COUNT(*) FROM semantic_cache").fetchone()[0])
+            conn = self._ensure_connected()
+            with conn:
+                conn.execute("DELETE FROM semantic_cache WHERE expires_at <= ?", (now,))
+            return int(conn.execute("SELECT COUNT(*) FROM semantic_cache").fetchone()[0])
 
     def clear(self) -> int:
         """Remove all cache entries and return the number deleted."""
         with self._lock:
-            cur = self._conn.execute("DELETE FROM semantic_cache")
-            self._conn.commit()
+            conn = self._ensure_connected()
+            with conn:
+                cur = conn.execute("DELETE FROM semantic_cache")
             return int(cur.rowcount)
 
     def close(self) -> None:
         with self._lock:
-            self._conn.close()
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
+
+    def __enter__(self) -> SemanticCache:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()

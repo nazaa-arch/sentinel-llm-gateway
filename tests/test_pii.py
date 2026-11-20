@@ -39,6 +39,7 @@ class TestNIKValidation:
             "3174057508950002",  # day 75 invalid (> 71)
             "3174051513950002",  # month 13 invalid
             "3174053102950002",  # Feb 31 invalid
+            "3174052902950002",  # Feb 29 on non-leap year 1995 invalid
             "3174051508950000",  # serial 0000 invalid
             "31740515089500",  # wrong length
         ],
@@ -119,8 +120,20 @@ class TestPIIRedactorAndVault:
         redactor = PIIRedactor()
         text = (
             "Order ORD-3174051508950002 in year 2026 cost Rp 150.000.000 with "
-            "SKU 9988776655 and invalid card 4532-0151-1283-0367."
+            "SKU 9988776655, ORD 4111111111111111, and invalid card 4532-0151-1283-0367."
         )
         result = redactor.redact(text)
         assert result.entities == []
         assert result.redacted_text == text
+
+    def test_vault_avoids_literal_placeholder_collision_and_restores_atomically(self) -> None:
+        redactor = PIIRedactor()
+        text = "Literal token <NIK_1> alongside real NIK 3174051508950002."
+        result = redactor.redact(text)
+        assert len(result.entities) == 1
+        assert result.entities[0].placeholder == "<NIK_2>"
+        assert result.redacted_text == "Literal token <NIK_1> alongside real NIK <NIK_2>."
+
+        restored, count = result.vault.restore(result.redacted_text)
+        assert count == 1
+        assert restored == text
